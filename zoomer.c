@@ -4,10 +4,13 @@
 #include <stdarg.h>
 #include <string.h>
 #include <errno.h>
+#include <math.h>
+#include <time.h>
 #include <unistd.h>
 #include <assert.h>
 #include <poll.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <linux/memfd.h>
 #include <linux/input-event-codes.h>
 #include <wayland-client-protocol.h>
@@ -20,7 +23,6 @@
 #include "xdg-output.h"
 
 #define MAX_OUTPUTS 16
-#define ZOOM_STEP   1.1f
 
 static void die(const char* fmt, ...)
 {
@@ -91,6 +93,77 @@ static GLuint compile_shader(GLenum type, const char* src)
     return shader;
 }
 
+//config
+typedef struct
+{
+    float scroll_speed;
+    float drag_friction;
+    float scale_friction;
+} Config;
+
+static void mkdir_p(const char* path)
+{
+    char tmp[512];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    for (char* p = tmp + 1; *p; p++)
+    {
+        if (*p == '/')
+        {
+            *p = 0;
+            mkdir(tmp, 0755);
+            *p = '/';
+        }
+    }
+    mkdir(tmp, 0755);
+}
+
+static Config load_config(void)
+{
+    Config c = { .scroll_speed = 5.0f, .drag_friction = 5.0f, .scale_friction = 10.0f };
+
+    const char* home = getenv("HOME");
+    const char* xdg = getenv("XDG_CONFIG_HOME");
+    char dir[256];
+    char path[512];
+    if (xdg && xdg[0]) snprintf(dir, sizeof(dir), "%s/zoomer", xdg);
+    else if (home) snprintf(dir, sizeof(dir), "%s/.config/zoomer", home);
+    else return c;
+    snprintf(path, sizeof(path), "%s/config", dir);
+
+    if (access(path, F_OK) != 0)
+    {
+        mkdir_p(dir);
+        FILE* f = fopen(path, "w");
+        if (f)
+        {
+            fprintf(f, "# how quickly scrolling zooms in/out\n");
+            fprintf(f, "scroll_speed = %.3f\n", c.scroll_speed);
+            fprintf(f, "# how quickly panning slows down after dragging\n");
+            fprintf(f, "drag_friction = %.3f\n", c.drag_friction);
+            fprintf(f, "# how quickly zooming slows down after scrolling\n");
+            fprintf(f, "scale_friction = %.3f\n", c.scale_friction);
+            fclose(f);
+        }
+    }
+
+    FILE* f = fopen(path, "r");
+    if (!f) return c;
+    char line[256];
+    while (fgets(line, sizeof(line), f))
+    {
+        char key[64];
+        float val;
+        if (sscanf(line, " %63[^= ] = %f", key, &val) == 2)
+        {
+            if (strcmp(key, "scroll_speed") == 0) c.scroll_speed = val;
+            else if (strcmp(key, "drag_friction") == 0) c.drag_friction = val;
+            else if (strcmp(key, "scale_friction") == 0) c.scale_friction = val;
+        }
+    }
+    fclose(f);
+    return c;
+}
+
 typedef struct
 {
     struct wl_output* output;
@@ -150,6 +223,8 @@ typedef struct
     uint32_t surface_width;
     uint32_t surface_height;
 
+    Config config;
+
     float zoom_level;
     double cursor_x;
     double cursor_y;
@@ -157,9 +232,14 @@ typedef struct
     float zoom_center_y;
     float pan_x;
     float pan_y;
+    float zoom_vel;
+    float pan_vel_x;
+    float pan_vel_y;
     bool drag_active;
     double drag_prev_x;
     double drag_prev_y;
+    double drag_accum_x;
+    double drag_accum_y;
     bool flashlight;
     float flashlight_radius;
     bool ctrl_held;
@@ -200,6 +280,9 @@ static void reset_view(State* s)
     s->zoom_center_y = 0.5f;
     s->pan_x = 0.0f;
     s->pan_y = 0.0f;
+    s->zoom_vel = 0.0f;
+    s->pan_vel_x = 0.0f;
+    s->pan_vel_y = 0.0f;
 }
 
 //outputs
@@ -374,8 +457,12 @@ static void pointer_handle_motion(void* data, struct wl_pointer* pointer, uint32
 
     if (state->drag_active)
     {
-        state->pan_x += (float)(new_x - state->drag_prev_x) / state->zoom_level;
-        state->pan_y += (float)(new_y - state->drag_prev_y) / state->zoom_level;
+        double dx = (new_x - state->drag_prev_x) / state->zoom_level;
+        double dy = (new_y - state->drag_prev_y) / state->zoom_level;
+        state->pan_x += (float)dx;
+        state->pan_y += (float)dy;
+        state->drag_accum_x += dx;
+        state->drag_accum_y += dy;
         state->drag_prev_x = new_x;
         state->drag_prev_y = new_y;
     }
@@ -400,7 +487,7 @@ static void pointer_handle_axis(void* data, struct wl_pointer* pointer, uint32_t
     }
     else
     {
-        apply_zoom(state, v < 0 ? ZOOM_STEP : 1.0f / ZOOM_STEP);
+        state->zoom_vel -= copysignf(state->config.scroll_speed, (float)v);
     }
 }
 
@@ -423,13 +510,17 @@ static void pointer_handle_button(void* data, struct wl_pointer* pointer, uint32
 {
     (void)pointer; (void)serial; (void)time;
     State* state = data;
-    if (button == BTN_LEFT)
+    if (button == BTN_LEFT || button == BTN_MIDDLE)
     {
         state->drag_active = (state_val == WL_POINTER_BUTTON_STATE_PRESSED);
         if (state->drag_active)
         {
             state->drag_prev_x = state->cursor_x;
             state->drag_prev_y = state->cursor_y;
+            state->drag_accum_x = 0.0;
+            state->drag_accum_y = 0.0;
+            state->pan_vel_x = 0.0f;
+            state->pan_vel_y = 0.0f;
         }
     }
 }
@@ -778,6 +869,7 @@ int main(void)
 {
     State state = {0};
 
+    state.config = load_config();
     state.flashlight_radius = 0.15f;
     state.cursor_x = 0.5;
     state.cursor_y = 0.5;
@@ -1013,6 +1105,9 @@ int main(void)
 
     int wl_fd = wl_display_get_fd(state.display);
 
+    struct timespec last_ts;
+    clock_gettime(CLOCK_MONOTONIC, &last_ts);
+
     while (!state.should_quit)
     {
         while (!state.should_quit && wl_display_prepare_read(state.display) != 0)
@@ -1030,6 +1125,12 @@ int main(void)
 
         wl_display_dispatch_pending(state.display);
 
+        struct timespec now_ts;
+        clock_gettime(CLOCK_MONOTONIC, &now_ts);
+        float dt = (now_ts.tv_sec - last_ts.tv_sec) + (now_ts.tv_nsec - last_ts.tv_nsec) / 1e9f;
+        last_ts = now_ts;
+        if (dt > 0.1f) dt = 0.1f;
+
         if (state.last_key_state == WL_KEYBOARD_KEY_STATE_PRESSED)
         {
             switch (state.last_key)
@@ -1038,10 +1139,10 @@ int main(void)
                     state.should_quit = true;
                     break;
                 case KEY_MINUS: // zoom out
-                    apply_zoom(&state, 1.0f / ZOOM_STEP);
+                    state.zoom_vel -= state.config.scroll_speed;
                     break;
                 case KEY_EQUAL: // zoom in
-                    apply_zoom(&state, ZOOM_STEP);
+                    state.zoom_vel += state.config.scroll_speed;
                     break;
                 case KEY_R:
                     reset_view(&state);
@@ -1051,6 +1152,34 @@ int main(void)
                     break;
             }
             state.last_key_state = WL_KEYBOARD_KEY_STATE_RELEASED;
+        }
+
+        if (state.zoom_vel != 0.0f)
+        {
+            apply_zoom(&state, expf(state.zoom_vel * dt));
+            state.zoom_vel *= expf(-state.config.scale_friction * dt);
+            if (fabsf(state.zoom_vel) < 1e-3f) state.zoom_vel = 0.0f;
+        }
+
+        if (state.drag_active)
+        {
+            if (dt > 0.0f)
+            {
+                state.pan_vel_x = (float)(state.drag_accum_x / dt);
+                state.pan_vel_y = (float)(state.drag_accum_y / dt);
+            }
+            state.drag_accum_x = 0.0;
+            state.drag_accum_y = 0.0;
+        }
+        else if (state.pan_vel_x != 0.0f || state.pan_vel_y != 0.0f)
+        {
+            state.pan_x += state.pan_vel_x * dt;
+            state.pan_y += state.pan_vel_y * dt;
+            float decay = expf(-state.config.drag_friction * dt);
+            state.pan_vel_x *= decay;
+            state.pan_vel_y *= decay;
+            if (fabsf(state.pan_vel_x) < 1e-4f) state.pan_vel_x = 0.0f;
+            if (fabsf(state.pan_vel_y) < 1e-4f) state.pan_vel_y = 0.0f;
         }
 
         OutputInfo* target = &state.outputs[state.target_output_index];
