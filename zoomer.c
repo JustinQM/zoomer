@@ -535,14 +535,12 @@ static void pointer_handle_axis_source(void* data, struct wl_pointer* pointer, u
     (void)data; (void)pointer; (void)axis_source;
 }
 
-static void pointer_handle_axis_stop(void* data, struct wl_pointer* pointer,
-    uint32_t time, uint32_t axis)
+static void pointer_handle_axis_stop(void* data, struct wl_pointer* pointer, uint32_t time, uint32_t axis)
 {
     (void)data; (void)pointer; (void)time; (void)axis;
 }
 
-static void pointer_handle_axis_discrete(void* data, struct wl_pointer* pointer,
-    uint32_t axis, int32_t discrete)
+static void pointer_handle_axis_discrete(void* data, struct wl_pointer* pointer, uint32_t axis, int32_t discrete)
 {
     (void)data; (void)pointer; (void)axis; (void)discrete;
 }

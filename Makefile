@@ -35,7 +35,7 @@ PROTO_SRC := $(PROTO_USED_SRC) $(PROTO_LINK_SRC)
 OBJ := $(BUILD)/zoomer.o $(BUILD)/glad.o $(PROTO_SRC:.c=.o)
 
 .DEFAULT_GOAL := all
-.PHONY: all clean run
+.PHONY: all clean run install
 
 all: $(ZOOMER)
 
@@ -44,6 +44,9 @@ run: $(ZOOMER)
 
 clean:
 	$(RM) -r $(BUILD)
+
+install: $(ZOOMER)
+	cp $(ZOOMER) /usr/local/bin/zoomer
 
 $(ZOOMER): $(OBJ)
 	$(CC) $(OBJ) -o $@ $(LDLIBS)
