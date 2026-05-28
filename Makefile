@@ -3,7 +3,7 @@ BUILD := build
 CC      := gcc
 CFLAGS  := -g -Wall -Wextra -I$(BUILD)
 CFLAGS  += $(shell pkg-config --cflags wayland-client egl wayland-egl)
-LDLIBS  := $(shell pkg-config --libs wayland-client egl wayland-egl gl)
+LDLIBS  := $(shell pkg-config --libs wayland-client egl wayland-egl gl wayland-cursor)
 
 WLR_PROTOCOLS_DIR     := $(shell pkg-config --variable=pkgdatadir wlr-protocols)
 WAYLAND_PROTOCOLS_DIR := $(shell pkg-config --variable=pkgdatadir wayland-protocols)

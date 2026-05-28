@@ -14,6 +14,7 @@
 #include <linux/memfd.h>
 #include <linux/input-event-codes.h>
 #include <wayland-client-protocol.h>
+#include <wayland-cursor.h>
 #include <EGL/egl.h>
 #include <wayland-egl.h>
 #include "glad.h"
@@ -244,6 +245,12 @@ typedef struct
     float flashlight_radius;
     bool ctrl_held;
 
+    struct wl_cursor_theme* cursor_theme;
+    struct wl_cursor* cursor_grab;
+    struct wl_cursor* cursor_grabbing;
+    struct wl_surface* cursor_surface;
+    uint32_t pointer_serial;
+
     int32_t target_output_index;
 
     struct wl_seat* seat;
@@ -410,7 +417,7 @@ static void keyboard_handle_key(void* data, struct wl_keyboard* keyboard, uint32
 {
     (void)keyboard; (void)serial; (void)time;
     State* state = data;
-    if (key == KEY_LEFTCTRL || key == KEY_RIGHTCTRL)
+    if (key == KEY_LEFTCTRL || key == KEY_RIGHTCTRL || key == KEY_LEFTSHIFT)
     {
         state->ctrl_held = (state_val == WL_KEYBOARD_KEY_STATE_PRESSED);
         return;
@@ -447,6 +454,42 @@ static const struct wl_keyboard_listener keyboard_listener =
     .modifiers   = keyboard_handle_modifiers,
     .repeat_info = keyboard_handle_repeat_info,
 };
+
+static void set_cursor(State* state, struct wl_cursor* cursor)
+{
+    if (!cursor) return;
+
+    struct wl_cursor_image* image = cursor->images[0];
+
+    struct wl_buffer* buffer =
+        wl_cursor_image_get_buffer(image);
+
+    wl_surface_attach(
+        state->cursor_surface,
+        buffer,
+        0,
+        0
+    );
+
+    wl_surface_damage_buffer(
+        state->cursor_surface,
+        0,
+        0,
+        image->width,
+        image->height
+    );
+
+    wl_surface_commit(state->cursor_surface);
+
+    wl_pointer_set_cursor(
+        state->pointer,
+        state->pointer_serial,
+        state->cursor_surface,
+        image->hotspot_x,
+        image->hotspot_y
+    );
+}
+
 
 static void pointer_handle_motion(void* data, struct wl_pointer* pointer, uint32_t time, wl_fixed_t x, wl_fixed_t y)
 {
@@ -495,10 +538,15 @@ static void pointer_handle_enter(void* data, struct wl_pointer* pointer, uint32_
 {
     (void)surface;
     (void)pointer;
-    (void)serial;
+
     State* state = data;
+
+    state->pointer_serial = serial;
+
     state->cursor_x = wl_fixed_to_double(x) / state->surface_width;
     state->cursor_y = wl_fixed_to_double(y) / state->surface_height;
+
+    set_cursor(state, state->cursor_grab);
 }
 
 static void pointer_handle_leave(void* data, struct wl_pointer* pointer, uint32_t serial, struct wl_surface* surface)
@@ -508,19 +556,29 @@ static void pointer_handle_leave(void* data, struct wl_pointer* pointer, uint32_
 
 static void pointer_handle_button(void* data, struct wl_pointer* pointer, uint32_t serial, uint32_t time, uint32_t button, uint32_t state_val)
 {
-    (void)pointer; (void)serial; (void)time;
+    (void)pointer;
+    (void)serial;
+    (void)time;
     State* state = data;
     if (button == BTN_LEFT || button == BTN_MIDDLE)
     {
-        state->drag_active = (state_val == WL_POINTER_BUTTON_STATE_PRESSED);
+        state->drag_active =
+            (state_val == WL_POINTER_BUTTON_STATE_PRESSED);
+
         if (state->drag_active)
         {
+            set_cursor(state, state->cursor_grabbing);
+
             state->drag_prev_x = state->cursor_x;
             state->drag_prev_y = state->cursor_y;
             state->drag_accum_x = 0.0;
             state->drag_accum_y = 0.0;
             state->pan_vel_x = 0.0f;
             state->pan_vel_y = 0.0f;
+        }
+        else
+        {
+            set_cursor(state, state->cursor_grab);
         }
     }
 }
@@ -976,6 +1034,13 @@ int main(void)
     wl_surface_commit(state.surface);
     wl_display_roundtrip(state.display);
     if (!state.layer_surface_configured) die("layer surface was never configured");
+
+    state.cursor_theme = wl_cursor_theme_load(NULL, 24, state.shm);
+    if (!state.cursor_theme) die("failed to load cursor theme");
+    state.cursor_grab = wl_cursor_theme_get_cursor(state.cursor_theme, "grab");
+    state.cursor_grabbing = wl_cursor_theme_get_cursor(state.cursor_theme, "grabbing");
+    if (!state.cursor_grab || !state.cursor_grabbing) die("failed to load grab cursors");
+    state.cursor_surface = wl_compositor_create_surface(state.compositor);
 
     state.egl_window = wl_egl_window_create(state.surface, (int)state.surface_width, (int)state.surface_height);
     if (!state.egl_window) die("wl_egl_window_create failed");
