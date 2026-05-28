@@ -1,52 +1,93 @@
-BUILD=./build
-WAYLAND_CFLAGS=$(shell pkg-config --cflags wayland-client)
-CFLAGS=-g -Wall -Wextra $(WAYLAND_CFLAGS) -I$(BUILD)
-LDLIBS=$(shell pkg-config --libs wayland-client)
-ZOOMER=$(BUILD)/zoomer
+BUILD := build
 
-WLR_PROTOCOLS_DIR=$(shell pkg-config --variable=pkgdatadir wlr-protocols)
-WL_LAYER_SHELL_UNSTABLE=wlr-layer-shell-unstable-v1
-WL_XDG_SHELL=xdg-shell
+CC      := gcc
+CFLAGS  := -g -Wall -Wextra -I$(BUILD)
+CFLAGS  += $(shell pkg-config --cflags wayland-client egl wayland-egl)
+LDLIBS  := $(shell pkg-config --libs wayland-client egl wayland-egl gl)
 
-WAYLAND_PROTOCOL_DIR=$(shell pkg-config --variable=pkgdatadir wayland-protocols)
-WL_IMAGE_COPY_CAPTURE=ext-image-copy-capture
-WL_IMAGE_CAPTURE_SOURCE=ext-image-capture-source
-WL_FOREIGN_TOPLEVEL=ext-foreign-toplevel-list
-WL_XDG_OUTPUT=xdg-output
+WLR_PROTOCOLS_DIR     := $(shell pkg-config --variable=pkgdatadir wlr-protocols)
+WAYLAND_PROTOCOLS_DIR := $(shell pkg-config --variable=pkgdatadir wayland-protocols)
+
+ZOOMER := $(BUILD)/zoomer
+
+# Protocols whose generated headers zoomer.c actually includes/uses.
+PROTO_USED := \
+    wlr-layer-shell-unstable-v1 \
+    ext-image-copy-capture \
+    ext-image-capture-source \
+    xdg-output
+
+# Protocols zoomer.c never includes, but whose generated code is still required
+# at LINK time: the protocols above reference interface symbols defined here.
+#   - wlr-layer-shell  -> xdg_popup_interface              (xdg-shell)
+#   - ext-image-capture-source -> ext_foreign_toplevel_handle_v1_interface
+# Generate private-code only (no header) since we never include them.
+PROTO_LINK := \
+    xdg-shell \
+    ext-foreign-toplevel-list
+
+PROTO_USED_SRC := $(addprefix $(BUILD)/,$(addsuffix .c,$(PROTO_USED)))
+PROTO_USED_HDR := $(addprefix $(BUILD)/,$(addsuffix .h,$(PROTO_USED)))
+PROTO_LINK_SRC := $(addprefix $(BUILD)/,$(addsuffix .c,$(PROTO_LINK)))
+
+PROTO_SRC := $(PROTO_USED_SRC) $(PROTO_LINK_SRC)
+
+OBJ := $(BUILD)/zoomer.o $(BUILD)/glad.o $(PROTO_SRC:.c=.o)
+
+.DEFAULT_GOAL := all
+.PHONY: all clean run
+
+all: $(ZOOMER)
 
 run: $(ZOOMER)
-	$(BUILD)/zoomer
+	$(ZOOMER)
 
-$(ZOOMER): zoomer.c WAYLAND	
-	gcc zoomer.c $(BUILD)/$(WL_LAYER_SHELL_UNSTABLE).c $(BUILD)/$(WL_IMAGE_COPY_CAPTURE).c $(BUILD)/$(WL_XDG_SHELL).c $(BUILD)/$(WL_IMAGE_CAPTURE_SOURCE).c $(BUILD)/$(WL_FOREIGN_TOPLEVEL).c $(BUILD)/$(WL_XDG_OUTPUT).c -o $(ZOOMER) $(CFLAGS) $(LDLIBS)
+clean:
+	$(RM) -r $(BUILD)
 
-WAYLAND: $(WL_LAYER_SHELL_UNSTABLE) $(WL_IMAGE_COPY_CAPTURE) $(WL_XDG_SHELL) $(WL_IMAGE_CAPTURE_SOURCE) $(WL_FOREIGN_TOPLEVEL) $(WL_XDG_OUTPUT)
-	echo "finished wayland setup"
+$(ZOOMER): $(OBJ)
+	$(CC) $(OBJ) -o $@ $(LDLIBS)
 
-$(WL_LAYER_SHELL_UNSTABLE): $(BUILD)
-	wayland-scanner private-code $(WLR_PROTOCOLS_DIR)/unstable/$(WL_LAYER_SHELL_UNSTABLE).xml $(BUILD)/$(WL_LAYER_SHELL_UNSTABLE).c
-	wayland-scanner client-header $(WLR_PROTOCOLS_DIR)/unstable/$(WL_LAYER_SHELL_UNSTABLE).xml $(BUILD)/$(WL_LAYER_SHELL_UNSTABLE).h
+# Our own sources (cwd) -> object files. zoomer.o additionally needs the
+# generated protocol headers to exist (and rebuilds if they change).
+$(BUILD)/%.o: %.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-$(WL_XDG_SHELL): $(BUILD)
-	wayland-scanner private-code $(WAYLAND_PROTOCOL_DIR)/stable/$(WL_XDG_SHELL)/$(WL_XDG_SHELL).xml $(BUILD)/$(WL_XDG_SHELL).c
-	wayland-scanner client-header $(WAYLAND_PROTOCOL_DIR)/stable/$(WL_XDG_SHELL)/$(WL_XDG_SHELL).xml $(BUILD)/$(WL_XDG_SHELL).h
+$(BUILD)/zoomer.o: $(PROTO_USED_HDR)
 
-$(WL_IMAGE_COPY_CAPTURE): $(BUILD)
-	wayland-scanner private-code $(WAYLAND_PROTOCOL_DIR)/staging/$(WL_IMAGE_COPY_CAPTURE)/$(WL_IMAGE_COPY_CAPTURE)-v1.xml $(BUILD)/$(WL_IMAGE_COPY_CAPTURE).c
-	wayland-scanner client-header $(WAYLAND_PROTOCOL_DIR)/staging/$(WL_IMAGE_COPY_CAPTURE)/$(WL_IMAGE_COPY_CAPTURE)-v1.xml $(BUILD)/$(WL_IMAGE_COPY_CAPTURE).h
+# Generated protocol sources (already in $(BUILD)) -> object files.
+$(BUILD)/%.o: $(BUILD)/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
-$(WL_IMAGE_CAPTURE_SOURCE): $(BUILD)
-	wayland-scanner private-code $(WAYLAND_PROTOCOL_DIR)/staging/$(WL_IMAGE_CAPTURE_SOURCE)/$(WL_IMAGE_CAPTURE_SOURCE)-v1.xml $(BUILD)/$(WL_IMAGE_CAPTURE_SOURCE).c
-	wayland-scanner client-header $(WAYLAND_PROTOCOL_DIR)/staging/$(WL_IMAGE_CAPTURE_SOURCE)/$(WL_IMAGE_CAPTURE_SOURCE)-v1.xml $(BUILD)/$(WL_IMAGE_CAPTURE_SOURCE).h
+# Per-protocol codegen. Source XML paths are irregular (stable/unstable/staging,
+# with or without -v1 suffixes), so each protocol gets its own rule. Grouped
+# targets (&:) run the recipe once and produce both outputs (GNU make >= 4.3).
+$(BUILD)/wlr-layer-shell-unstable-v1.c $(BUILD)/wlr-layer-shell-unstable-v1.h &: \
+		$(WLR_PROTOCOLS_DIR)/unstable/wlr-layer-shell-unstable-v1.xml | $(BUILD)
+	wayland-scanner private-code  $< $(BUILD)/wlr-layer-shell-unstable-v1.c
+	wayland-scanner client-header $< $(BUILD)/wlr-layer-shell-unstable-v1.h
 
-$(WL_FOREIGN_TOPLEVEL): $(BUILD)
-	wayland-scanner private-code $(WAYLAND_PROTOCOL_DIR)/staging/$(WL_FOREIGN_TOPLEVEL)/$(WL_FOREIGN_TOPLEVEL)-v1.xml $(BUILD)/$(WL_FOREIGN_TOPLEVEL).c
-	wayland-scanner client-header $(WAYLAND_PROTOCOL_DIR)/staging/$(WL_FOREIGN_TOPLEVEL)/$(WL_FOREIGN_TOPLEVEL)-v1.xml $(BUILD)/$(WL_FOREIGN_TOPLEVEL).h
+$(BUILD)/ext-image-copy-capture.c $(BUILD)/ext-image-copy-capture.h &: \
+		$(WAYLAND_PROTOCOLS_DIR)/staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml | $(BUILD)
+	wayland-scanner private-code  $< $(BUILD)/ext-image-copy-capture.c
+	wayland-scanner client-header $< $(BUILD)/ext-image-copy-capture.h
 
-$(WL_XDG_OUTPUT): $(BUILD)
-	wayland-scanner private-code $(WAYLAND_PROTOCOL_DIR)/unstable/$(WL_XDG_OUTPUT)/$(WL_XDG_OUTPUT)-unstable-v1.xml $(BUILD)/$(WL_XDG_OUTPUT).c
-	wayland-scanner client-header $(WAYLAND_PROTOCOL_DIR)/unstable/$(WL_XDG_OUTPUT)/$(WL_XDG_OUTPUT)-unstable-v1.xml $(BUILD)/$(WL_XDG_OUTPUT).h
+$(BUILD)/ext-image-capture-source.c $(BUILD)/ext-image-capture-source.h &: \
+		$(WAYLAND_PROTOCOLS_DIR)/staging/ext-image-capture-source/ext-image-capture-source-v1.xml | $(BUILD)
+	wayland-scanner private-code  $< $(BUILD)/ext-image-capture-source.c
+	wayland-scanner client-header $< $(BUILD)/ext-image-capture-source.h
 
+$(BUILD)/xdg-output.c $(BUILD)/xdg-output.h &: \
+		$(WAYLAND_PROTOCOLS_DIR)/unstable/xdg-output/xdg-output-unstable-v1.xml | $(BUILD)
+	wayland-scanner private-code  $< $(BUILD)/xdg-output.c
+	wayland-scanner client-header $< $(BUILD)/xdg-output.h
+
+# Link-only protocols: private-code only, no header.
+$(BUILD)/xdg-shell.c: $(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell/xdg-shell.xml | $(BUILD)
+	wayland-scanner private-code $< $@
+
+$(BUILD)/ext-foreign-toplevel-list.c: $(WAYLAND_PROTOCOLS_DIR)/staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1.xml | $(BUILD)
+	wayland-scanner private-code $< $@
 
 $(BUILD):
 	mkdir -p $(BUILD)
