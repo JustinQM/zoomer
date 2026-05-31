@@ -458,6 +458,7 @@ static const struct wl_keyboard_listener keyboard_listener =
 static void set_cursor(State* state, struct wl_cursor* cursor)
 {
     if (!cursor) return;
+    if (!state->cursor_surface) return;
 
     struct wl_cursor_image* image = cursor->images[0];
 
@@ -1036,11 +1037,13 @@ int main(void)
     if (!state.layer_surface_configured) die("layer surface was never configured");
 
     state.cursor_theme = wl_cursor_theme_load(NULL, 24, state.shm);
-    if (!state.cursor_theme) die("failed to load cursor theme");
-    state.cursor_grab = wl_cursor_theme_get_cursor(state.cursor_theme, "grab");
-    state.cursor_grabbing = wl_cursor_theme_get_cursor(state.cursor_theme, "grabbing");
-    if (!state.cursor_grab || !state.cursor_grabbing) die("failed to load grab cursors");
-    state.cursor_surface = wl_compositor_create_surface(state.compositor);
+    if (state.cursor_theme)
+    {
+        state.cursor_grab = wl_cursor_theme_get_cursor(state.cursor_theme, "grab");
+        state.cursor_grabbing = wl_cursor_theme_get_cursor(state.cursor_theme, "grabbing");
+        if (state.cursor_grab && state.cursor_grabbing) 
+            state.cursor_surface = wl_compositor_create_surface(state.compositor);
+    }
 
     state.egl_window = wl_egl_window_create(state.surface, (int)state.surface_width, (int)state.surface_height);
     if (!state.egl_window) die("wl_egl_window_create failed");
