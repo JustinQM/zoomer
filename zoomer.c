@@ -79,7 +79,8 @@ const char* frag_src =
     "        frag_color = vec4(0.0, 0.0, 0.0, 1.0);\n"
     "        return;\n"
     "    }\n"
-    "    frag_color = texture(u_texture, uv);\n"
+    "    frag_color.rgb = texture(u_texture, uv).rgb;\n"
+    "    frag_color.a = 1.0;\n"
     "    if (u_flashlight == 1) {\n"
     "        vec2 diff = v_uv - u_flashlight_pos;\n"
     "        diff.x *= u_aspect_ratio;\n"
@@ -1126,7 +1127,7 @@ int main(void)
         for (int r = 0; r < state.outputs[i].height; r++)
         {
             uint8_t* src = (uint8_t*)state.shm_data + state.outputs[i].buffer_offset + ((size_t)r * state.outputs[i].width * 4);
-            uint8_t* dst = (uint8_t*)state.composite + ((size_t)(state.outputs[i].y + r) * state.composite_width * 4) + ((size_t)state.outputs[i].x * 4);
+            uint8_t* dst = (uint8_t*)state.composite + ((size_t)(state.outputs[i].y - start_y + r) * state.composite_width * 4) + (((size_t)state.outputs[i].x  - start_x)* 4);
             memcpy(dst, src, (size_t)state.outputs[i].width * 4);
         }
     }
@@ -1271,8 +1272,8 @@ int main(void)
 
         OutputInfo* target = &state.outputs[state.target_output_index];
         glUniform2f(loc_uv_offset,
-            (float)target->x / (float)state.composite_width,
-            (float)target->y / (float)state.composite_height);
+            (float)(target->x - start_x) / (float)state.composite_width,
+            (float)(target->y - start_y) / (float)state.composite_height);
         glUniform2f(loc_uv_scale,
             (float)target->width / (float)state.composite_width,
             (float)target->height / (float)state.composite_height);
