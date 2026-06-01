@@ -5,6 +5,7 @@
 #include <string.h>
 #include <errno.h>
 #include <math.h>
+#include <limits.h>
 #include <time.h>
 #include <unistd.h>
 #include <assert.h>
@@ -24,6 +25,18 @@
 #include "xdg-output.h"
 
 #define MAX_OUTPUTS 16
+
+static inline int32_t min(int32_t x, int32_t y)
+{
+    if (x > y) return y;
+    return x;
+}
+
+static inline int32_t max(int32_t x, int32_t y)
+{
+    if (x < y) return y;
+    return x;
+}
 
 static void die(const char* fmt, ...)
 {
@@ -1088,13 +1101,21 @@ int main(void)
 
     glViewport(0, 0, (GLsizei)state.surface_width, (GLsizei)state.surface_height);
 
+    int32_t start_x = INT_MAX;
+    int32_t start_y = INT_MAX;
+    int32_t end_x   = INT_MIN;
+    int32_t end_y   = INT_MIN;
+
     for (uint32_t i = 0; i < state.output_count; i++)
     {
-        int32_t right = abs(state.outputs[i].x) + abs(state.outputs[i].width);
-        int32_t bottom = abs(state.outputs[i].y) + abs(state.outputs[i].height);
-        if (right > state.composite_width) state.composite_width = right;
-        if (bottom > state.composite_height) state.composite_height = bottom;
+        start_x = min(state.outputs[i].x, start_x);
+        start_y = min(state.outputs[i].y, start_y);
+        end_x = max(state.outputs[i].x + state.outputs[i].width, end_x);
+        end_y = max(state.outputs[i].y + state.outputs[i].height, end_y);
     }
+
+    state.composite_width = end_x - start_x;
+    state.composite_height = end_y - start_y;
 
     state.composite_size = (size_t)state.composite_width * (size_t)state.composite_height * 4;
     state.composite = calloc((size_t)state.composite_width * (size_t)state.composite_height, 4);
