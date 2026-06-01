@@ -1090,8 +1090,8 @@ int main(void)
 
     for (uint32_t i = 0; i < state.output_count; i++)
     {
-        int32_t right = state.outputs[i].x + state.outputs[i].width;
-        int32_t bottom = state.outputs[i].y + state.outputs[i].height;
+        int32_t right = abs(state.outputs[i].x) + abs(state.outputs[i].width);
+        int32_t bottom = abs(state.outputs[i].y) + abs(state.outputs[i].height);
         if (right > state.composite_width) state.composite_width = right;
         if (bottom > state.composite_height) state.composite_height = bottom;
     }
