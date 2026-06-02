@@ -4,7 +4,7 @@
 #include <assert.h>
 #include <dlfcn.h>
 #include <sys/stat.h>
-#include "capture_kwin.h"
+#include "capture_portal.h"
 #include "core_wayland.h"
 
 // opaque types — we never dereference these directly
@@ -79,13 +79,13 @@ static struct pw_buffer* (*p_pw_stream_dequeue_buffer)(struct pw_stream*);
 static int      (*p_pw_stream_queue_buffer)        (struct pw_stream*, struct pw_buffer*);
 static int      (*p_pw_stream_update_params)       (struct pw_stream*, const struct spa_pod**, uint32_t);
 
-static bool kwin_libs_load(void)
+static bool portal_libs_load(void)
 {
     void* sbus = dlopen("libsystemd.so.0", RTLD_LAZY | RTLD_LOCAL);
-    if (!sbus) { fprintf(stderr, "kwin: dlopen libsystemd: %s\n", dlerror()); return false; }
+    if (!sbus) { fprintf(stderr, "portal: dlopen libsystemd: %s\n", dlerror()); return false; }
 
     void* pw = dlopen("libpipewire-0.3.so.0", RTLD_LAZY | RTLD_LOCAL);
-    if (!pw) { fprintf(stderr, "kwin: dlopen libpipewire: %s\n", dlerror()); return false; }
+    if (!pw) { fprintf(stderr, "portal: dlopen libpipewire: %s\n", dlerror()); return false; }
 
 #define LOAD_SBUS(name) p_##name = dlsym(sbus, #name); if (!p_##name) return false;
 #define LOAD_PW(name)   p_##name = dlsym(pw,   #name); if (!p_##name) return false;
@@ -155,18 +155,18 @@ typedef struct
     struct spa_hook pw_listeners[MAX_OUTPUTS];
     uint32_t frames_done;
     int32_t strides[MAX_OUTPUTS];
-} CaptureKwin;
+} CapturePortal;
 
 typedef struct
 {
-    CaptureKwin* cap;
+    CapturePortal* cap;
     uint32_t     index;
 } StreamData;
 
 static void stream_param_changed(void* userdata, uint32_t id, const struct spa_pod* param)
 {
     StreamData* sd = userdata;
-    CaptureKwin* cap = sd->cap;
+    CapturePortal* cap = sd->cap;
 
     if (param == NULL || id != SPA_PARAM_Format) return;
 
@@ -188,7 +188,7 @@ static void stream_param_changed(void* userdata, uint32_t id, const struct spa_p
 static void stream_process(void* userdata)
 {
     StreamData* sd = userdata;
-    CaptureKwin* cap = sd->cap;
+    CapturePortal* cap = sd->cap;
     uint32_t index = sd->index;
 
     struct pw_buffer* pw_buf = p_pw_stream_dequeue_buffer(cap->pw_streams[index]);
@@ -649,7 +649,7 @@ static int portal_open_pipewire_remote(sd_bus* bus, const char* session_handle)
     return fd;
 }
 
-static void pipewire_init(CaptureKwin* cap, int pw_fd)
+static void pipewire_init(CapturePortal* cap, int pw_fd)
 {
     p_pw_init(NULL, NULL);
 
@@ -667,7 +667,7 @@ static void pipewire_init(CaptureKwin* cap, int pw_fd)
     p_pw_thread_loop_unlock(cap->pw_loop);
 }
 
-static void pipewire_create_streams(CaptureKwin* cap, uint32_t* node_ids, uint32_t node_count)
+static void pipewire_create_streams(CapturePortal* cap, uint32_t* node_ids, uint32_t node_count)
 {
     p_pw_thread_loop_lock(cap->pw_loop);
 
@@ -702,9 +702,9 @@ static void pipewire_create_streams(CaptureKwin* cap, uint32_t* node_ids, uint32
 }
 
 //Interface
-static void kwin_grab(void* backend)
+static void portal_grab(void* backend)
 {
-    CaptureKwin* cap = backend;
+    CapturePortal* cap = backend;
     char* session = portal_create_session(cap->bus);
     portal_select_sources(cap->bus, session);
 
@@ -725,17 +725,17 @@ static void kwin_grab(void* backend)
     p_pw_thread_loop_unlock(cap->pw_loop);
 }
 
-static const void* kwin_output_pixels(void* backend, uint32_t index)
+static const void* portal_output_pixels(void* backend, uint32_t index)
 {
-    CaptureKwin* cap = backend;
+    CapturePortal* cap = backend;
     if (index >= cap->output_count) return NULL;
     if (!cap->pixels[index]) return NULL;
     return cap->pixels[index];
 }
 
-static void kwin_destroy(void* backend)
+static void portal_destroy(void* backend)
 {
-    CaptureKwin* cap = backend;
+    CapturePortal* cap = backend;
 
     if (cap->pw_loop) p_pw_thread_loop_stop(cap->pw_loop);
 
@@ -757,16 +757,16 @@ static void kwin_destroy(void* backend)
     free(cap);
 }
 
-const CaptureImpl capture_kwin_impl =
+const CaptureImpl capture_portal_impl =
 {
-    .grab = kwin_grab,
-    .output_pixels = kwin_output_pixels,
-    .destroy = kwin_destroy,
+    .grab = portal_grab,
+    .output_pixels = portal_output_pixels,
+    .destroy = portal_destroy,
 };
 
-bool capture_kwin_available(void)
+bool capture_portal_available(void)
 {
-    if (!kwin_libs_load()) return false;
+    if (!portal_libs_load()) return false;
 
     sd_bus* bus = NULL;
     int32_t ok = p_sd_bus_open_user(&bus);
@@ -780,15 +780,15 @@ bool capture_kwin_available(void)
     return (flags & 1) != 0;
 }
 
-void* capture_kwin_create(const OutputInfo* outputs, uint32_t output_count)
+void* capture_portal_create(const OutputInfo* outputs, uint32_t output_count)
 {
-    CaptureKwin* cap = calloc(1, sizeof(CaptureKwin));
+    CapturePortal* cap = calloc(1, sizeof(CapturePortal));
     cap->outputs = outputs;
     cap->output_count = output_count;
 
     sd_bus* bus = NULL;
     int32_t ok = p_sd_bus_open_user(&bus);
-    if (ok < 0) die("failed to open session bus for kwin capture");
+    if (ok < 0) die("failed to open session bus for portal capture");
     cap->bus = bus;
 
     return cap;
