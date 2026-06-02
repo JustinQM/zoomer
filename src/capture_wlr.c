@@ -223,12 +223,11 @@ static void wlr_grab(void* backend)
     }
 }
 
-static const void* wlr_output_pixels(void* backend, uint32_t index, int32_t* stride)
+static const void* wlr_output_pixels(void* backend, uint32_t index)
 {
     CaptureWlr* w = backend;
     if (index >= w->output_count) return NULL;
     if (!w->wlr_outputs[index].frame_done) return NULL;
-    if (stride) *stride = w->outputs[index].width * 4;
     return (const uint8_t*)w->shm_data + w->wlr_outputs[index].buffer_offset;
 }
 

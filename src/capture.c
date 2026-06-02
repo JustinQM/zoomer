@@ -47,9 +47,9 @@ void capture_grab(Capture* cap)
     cap->impl->grab(cap->backend);
 }
 
-const void* capture_output_pixels(Capture* cap, uint32_t index, int32_t* stride)
+const void* capture_output_pixels(Capture* cap, uint32_t index)
 {
-    return cap->impl->output_pixels(cap->backend, index, stride);
+    return cap->impl->output_pixels(cap->backend, index);
 }
 
 void capture_destroy(Capture* cap)

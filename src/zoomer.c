@@ -111,7 +111,7 @@ int main(void)
     core_wayland_connect(&core);
 
     capture_init(capture, core.display, core.shm, core.outputs, core.output_count);
-    capture_grab(capture);
+    capture_grab(capture); // blocks until every output is captured
 
     core_wayland_create_surface(&core);
 
@@ -164,10 +164,10 @@ int main(void)
 
     for (uint32_t i = 0; i < core.output_count; i++)
     {
-        int32_t stride = 0;
-        const uint8_t* src_base = capture_output_pixels(capture, i, &stride);
+        const uint8_t* src_base = capture_output_pixels(capture, i);
         if (!src_base) continue;
 
+        int32_t stride = core.outputs[i].width * 4;
         for (int r = 0; r < core.outputs[i].height; r++)
         {
             const uint8_t* src = src_base + ((size_t)r * stride);
