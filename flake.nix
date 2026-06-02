@@ -1,8 +1,6 @@
 {
     description = "zoomer - wayland zoom tool";
-
     inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
     outputs = { self, nixpkgs }:
     let
         system = "x86_64-linux";
@@ -19,7 +17,7 @@
             [
                 pkg-config
                 wayland-scanner
-                gdb
+                makeWrapper
             ];
 
             buildInputs = with pkgs; [
@@ -34,7 +32,9 @@
 
             installPhase = ''
                 mkdir -p $out/bin
-                cp build/zoomer $out/bin/zoomer
+                cp build/zoomer $out/bin/.zoomer-unwrapped
+                makeWrapper $out/bin/.zoomer-unwrapped $out/bin/zoomer \
+                    --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath [ pkgs.systemd pkgs.pipewire ]}"
             '';
         };
 
