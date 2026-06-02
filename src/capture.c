@@ -41,6 +41,7 @@ void capture_init(Capture* cap, struct wl_display* display, struct wl_shm* shm, 
     {
         cap->backend = capture_kwin_create(outputs, output_count);
         cap->impl = &capture_kwin_impl;
+        return;
     }
     die("no supported screen-capture backend: this compositor does not implement\n"
         "ext-image-copy-capture (wlroots) or KWin/PipeWire");

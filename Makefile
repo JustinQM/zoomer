@@ -2,8 +2,8 @@ BUILD  := build
 SRCDIR := src
 CC      := gcc
 CFLAGS  := -g -Wall -Wextra -I$(SRCDIR) -I. -I$(BUILD)
-CFLAGS  += $(shell pkg-config --cflags wayland-client egl wayland-egl)
-LDLIBS  := $(shell pkg-config --libs wayland-client egl wayland-egl gl wayland-cursor)
+CFLAGS  += $(shell pkg-config --cflags wayland-client egl wayland-egl libsystemd libpipewire-0.3)
+LDLIBS  := $(shell pkg-config --libs wayland-client egl wayland-egl gl wayland-cursor) -ldl
 
 WLR_PROTOCOLS_DIR     := $(shell pkg-config --variable=pkgdatadir wlr-protocols)
 WAYLAND_PROTOCOLS_DIR := $(shell pkg-config --variable=pkgdatadir wayland-protocols)
