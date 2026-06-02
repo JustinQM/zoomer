@@ -2,6 +2,7 @@
 
 #include "capture.h"
 #include "capture_wlr.h"
+#include "capture_kwin.h"
 
 struct Capture
 {
@@ -36,10 +37,13 @@ void capture_init(Capture* cap, struct wl_display* display, struct wl_shm* shm, 
         return;
     }
 
-    // future: probe for org.freedesktop.portal.ScreenCast here and select the
-    // KWin/PipeWire backend instead of dying.
+    if (capture_kwin_available())
+    {
+        cap->backend = capture_kwin_create(outputs, output_count);
+        cap->impl = &capture_kwin_impl;
+    }
     die("no supported screen-capture backend: this compositor does not implement\n"
-        "ext-image-copy-capture (wlroots), and the KWin/PipeWire backend is not yet implemented");
+        "ext-image-copy-capture (wlroots) or KWin/PipeWire");
 }
 
 void capture_grab(Capture* cap)

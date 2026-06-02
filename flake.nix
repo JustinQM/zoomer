@@ -27,6 +27,8 @@
                 wlr-protocols
                 libGL
                 mesa
+                systemd.dev
+                pipewire
             ];
 
             installPhase = ''
@@ -35,9 +37,12 @@
             '';
         };
 
-        devShells.${system}.default = pkgs.mkShell 
+        devShells.${system}.default = pkgs.mkShell
         {
             inputsFrom = [ self.packages.${system}.default ];
+            shellHook = ''
+                export CPATH="${pkgs.pipewire.dev}/include/pipewire-0.3:${pkgs.pipewire.dev}/include/spa-0.2:$CPATH"
+            '';
         };
     };
 }
