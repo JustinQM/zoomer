@@ -191,6 +191,8 @@ static void stream_process(void* userdata)
     CapturePortal* cap = sd->cap;
     uint32_t index = sd->index;
 
+    if (cap->pixels[index] != NULL) return;
+
     struct pw_buffer* pw_buf = p_pw_stream_dequeue_buffer(cap->pw_streams[index]);
     if (!pw_buf) return;
 
