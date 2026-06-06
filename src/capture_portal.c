@@ -154,6 +154,7 @@ typedef struct
     struct pw_stream* pw_streams[MAX_OUTPUTS];
     struct spa_hook pw_listeners[MAX_OUTPUTS];
     uint32_t frames_done;
+    bool     stream_error;
     int32_t strides[MAX_OUTPUTS];
 } CapturePortal;
 
@@ -217,9 +218,24 @@ static void stream_process(void* userdata)
         p_pw_thread_loop_signal(cap->pw_loop, false);
 }
 
+static void stream_state_changed(void* userdata, enum pw_stream_state old, enum pw_stream_state state, const char* error)
+{
+    (void)old;
+    (void)error;
+    StreamData* sd = userdata;
+    CapturePortal* cap = sd->cap;
+
+    if (state == PW_STREAM_STATE_ERROR)
+    {
+        cap->stream_error = true;
+        p_pw_thread_loop_signal(cap->pw_loop, false);
+    }
+}
+
 static const struct pw_stream_events stream_events =
 {
     PW_VERSION_STREAM_EVENTS,
+    .state_changed = stream_state_changed,
     .param_changed = stream_param_changed,
     .process       = stream_process,
 };
@@ -722,9 +738,16 @@ static void portal_grab(void* backend)
     pipewire_create_streams(cap, node_ids, node_count);
 
     p_pw_thread_loop_lock(cap->pw_loop);
-    while (cap->frames_done < node_count)
-        p_pw_thread_loop_wait(cap->pw_loop);
-    p_pw_thread_loop_unlock(cap->pw_loop);
+        while (cap->frames_done < node_count && !cap->stream_error)
+        {
+            p_pw_thread_loop_wait(cap->pw_loop);
+        }
+        p_pw_thread_loop_unlock(cap->pw_loop);
+
+        if (cap->stream_error)
+        {
+            die("pipewire stream error during capture (no usable format negotiated)");
+        }
 }
 
 static const void* portal_output_pixels(void* backend, uint32_t index)
