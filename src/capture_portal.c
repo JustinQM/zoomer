@@ -191,17 +191,20 @@ static void stream_process(void* userdata)
     StreamData* sd = userdata;
     CapturePortal* cap = sd->cap;
     uint32_t index = sd->index;
-
     if (cap->pixels[index] != NULL) return;
-
     struct pw_buffer* pw_buf = p_pw_stream_dequeue_buffer(cap->pw_streams[index]);
     if (!pw_buf) return;
-
     struct spa_buffer* spa_buf = pw_buf->buffer;
     if (spa_buf->datas[0].data)
     {
         uint32_t stride = spa_buf->datas[0].chunk->stride;
-        uint32_t size   = spa_buf->datas[0].chunk->size;
+        // chunk->size is unreliable with niri's SHM path — always use maxsize
+        uint32_t size = spa_buf->datas[0].maxsize;
+        if (size == 0 || stride == 0)
+        {
+            p_pw_stream_queue_buffer(cap->pw_streams[index], pw_buf);
+            return;
+        }
         void* pixels = malloc(size);
         if (pixels)
         {
@@ -210,9 +213,7 @@ static void stream_process(void* userdata)
             cap->strides[index] = (int32_t)stride;
         }
     }
-
     p_pw_stream_queue_buffer(cap->pw_streams[index], pw_buf);
-
     cap->frames_done++;
     if (cap->frames_done >= cap->output_count)
         p_pw_thread_loop_signal(cap->pw_loop, false);
@@ -304,6 +305,8 @@ static int simple_response_callback(sd_bus_message* m, void* userdata, sd_bus_er
 typedef struct
 {
     uint32_t node_ids[MAX_OUTPUTS];
+    int32_t  node_x[MAX_OUTPUTS];
+    int32_t  node_y[MAX_OUTPUTS];
     uint32_t node_count;
     char* restore_token;
     bool     done;
@@ -317,11 +320,7 @@ static int start_response_callback(sd_bus_message* m, void* userdata, sd_bus_err
 
     uint32_t response_code = 0;
     p_sd_bus_message_read(m, "u", &response_code);
-    if (response_code != 0)
-    {
-        response->done = true;
-        return 1;
-    }
+    if (response_code != 0) { response->done = true; return 1; }
 
     p_sd_bus_message_enter_container(m, 'a', "{sv}");
     while (p_sd_bus_message_enter_container(m, 'e', "sv") > 0)
@@ -336,10 +335,38 @@ static int start_response_callback(sd_bus_message* m, void* userdata, sd_bus_err
             {
                 uint32_t node_id = 0;
                 p_sd_bus_message_read_basic(m, 'u', &node_id);
-                p_sd_bus_message_skip(m, "a{sv}");
+
+                int32_t pos_x = 0, pos_y = 0;
+                p_sd_bus_message_enter_container(m, 'a', "{sv}");
+                while (p_sd_bus_message_enter_container(m, 'e', "sv") > 0)
+                {
+                    const char* prop = NULL;
+                    p_sd_bus_message_read_basic(m, 's', &prop);
+                    if (strcmp(prop, "position") == 0)
+                    {
+                        p_sd_bus_message_enter_container(m, 'v', "(ii)");
+                        p_sd_bus_message_enter_container(m, 'r', "ii");
+                        p_sd_bus_message_read_basic(m, 'i', &pos_x);
+                        p_sd_bus_message_read_basic(m, 'i', &pos_y);
+                        p_sd_bus_message_exit_container(m);
+                        p_sd_bus_message_exit_container(m);
+                    }
+                    else
+                    {
+                        p_sd_bus_message_skip(m, "v");
+                    }
+                    p_sd_bus_message_exit_container(m); // e
+                }
+                p_sd_bus_message_exit_container(m); // a{sv}
+
                 if (response->node_count < MAX_OUTPUTS)
-                    response->node_ids[response->node_count++] = node_id;
-                p_sd_bus_message_exit_container(m);
+                {
+                    uint32_t idx = response->node_count++;
+                    response->node_ids[idx] = node_id;
+                    response->node_x[idx]   = pos_x;
+                    response->node_y[idx]   = pos_y;
+                }
+                p_sd_bus_message_exit_container(m); // r
             }
             p_sd_bus_message_exit_container(m); // a
             p_sd_bus_message_exit_container(m); // v
@@ -356,9 +383,9 @@ static int start_response_callback(sd_bus_message* m, void* userdata, sd_bus_err
         {
             p_sd_bus_message_skip(m, "v");
         }
-        p_sd_bus_message_exit_container(m);
+        p_sd_bus_message_exit_container(m); // e
     }
-    p_sd_bus_message_exit_container(m);
+    p_sd_bus_message_exit_container(m); // a{sv}
 
     response->success = true;
     response->done = true;
@@ -595,21 +622,18 @@ static void portal_select_sources(sd_bus* bus, const char* session_handle)
     if (!response.success) die("SelectSources rejected by portal");
 }
 
-static void portal_start(sd_bus* bus, const char* session_handle, uint32_t* node_ids, uint32_t* node_count)
+static void portal_start(sd_bus* bus, const char* session_handle, uint32_t* node_ids, int32_t* node_x, int32_t* node_y, uint32_t* node_count)
 {
     char* request_path = create_request_path(bus);
     char* match_rule = create_match_rule(request_path);
-
     sd_bus_slot* slot = NULL;
     StartResponse response = {0};
     p_sd_bus_add_match(bus, &slot, match_rule, start_response_callback, &response);
-
     sd_bus_message* msg = NULL;
     p_sd_bus_message_new_method_call(bus, &msg, PORTAL_BUS, PORTAL_PATH, PORTAL_IFACE, "Start");
     p_sd_bus_message_append_basic(msg, 'o', session_handle);
     p_sd_bus_message_append_basic(msg, 's', "");
     p_sd_bus_message_open_container(msg, 'a', "{sv}");
-    // handle_token
     p_sd_bus_message_open_container(msg, 'e', "sv");
     p_sd_bus_message_append_basic(msg, 's', "handle_token");
     p_sd_bus_message_open_container(msg, 'v', "s");
@@ -617,30 +641,26 @@ static void portal_start(sd_bus* bus, const char* session_handle, uint32_t* node
     p_sd_bus_message_close_container(msg);
     p_sd_bus_message_close_container(msg);
     p_sd_bus_message_close_container(msg);
-
     int32_t ok = p_sd_bus_call(bus, msg, 0, NULL, NULL);
     p_sd_bus_message_unref(msg);
     if (ok < 0) die("Start failed: %s", strerror(-ok));
-
     while (!response.done)
     {
         p_sd_bus_wait(bus, UINT64_MAX);
         p_sd_bus_process(bus, NULL);
     }
-
     if (response.restore_token)
     {
         write_restore_token(response.restore_token);
         free(response.restore_token);
     }
-
     free(request_path);
     free(match_rule);
     p_sd_bus_slot_unref(slot);
-
     if (!response.success) die("Start rejected by portal");
-
     memcpy(node_ids, response.node_ids, response.node_count * sizeof(uint32_t));
+    memcpy(node_x,   response.node_x,   response.node_count * sizeof(int32_t));
+    memcpy(node_y,   response.node_y,   response.node_count * sizeof(int32_t));
     *node_count = response.node_count;
 }
 
@@ -725,29 +745,41 @@ static void portal_grab(void* backend)
     CapturePortal* cap = backend;
     char* session = portal_create_session(cap->bus);
     portal_select_sources(cap->bus, session);
-
     uint32_t node_ids[MAX_OUTPUTS] = {0};
+    int32_t  node_x[MAX_OUTPUTS]   = {0};
+    int32_t  node_y[MAX_OUTPUTS]   = {0};
     uint32_t node_count = 0;
-    portal_start(cap->bus, session, node_ids, &node_count);
-
+    portal_start(cap->bus, session, node_ids, node_x, node_y, &node_count);
     cap->session_handle = session;
+
+    // Reorder node_ids to match cap->outputs order by position
+    uint32_t reordered[MAX_OUTPUTS] = {0};
+    for (uint32_t i = 0; i < cap->output_count; i++)
+    {
+        for (uint32_t j = 0; j < node_count; j++)
+        {
+            if (node_x[j] == cap->outputs[i].x && node_y[j] == cap->outputs[i].y)
+            {
+                reordered[i] = node_ids[j];
+                break;
+            }
+        }
+    }
+    memcpy(node_ids, reordered, node_count * sizeof(uint32_t));
 
     int pw_fd = portal_open_pipewire_remote(cap->bus, session);
     pipewire_init(cap, pw_fd);
-
     pipewire_create_streams(cap, node_ids, node_count);
-
     p_pw_thread_loop_lock(cap->pw_loop);
-        while (cap->frames_done < node_count && !cap->stream_error)
-        {
-            p_pw_thread_loop_wait(cap->pw_loop);
-        }
-        p_pw_thread_loop_unlock(cap->pw_loop);
-
-        if (cap->stream_error)
-        {
-            die("pipewire stream error during capture (no usable format negotiated)");
-        }
+    while (cap->frames_done < node_count && !cap->stream_error)
+    {
+        p_pw_thread_loop_wait(cap->pw_loop);
+    }
+    p_pw_thread_loop_unlock(cap->pw_loop);
+    if (cap->stream_error)
+    {
+        die("pipewire stream error during capture (no usable format negotiated)");
+    }
 }
 
 static const void* portal_output_pixels(void* backend, uint32_t index)
