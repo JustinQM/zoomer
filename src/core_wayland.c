@@ -46,7 +46,7 @@ static void mkdir_p(const char* path)
 
 Config load_config(void)
 {
-    Config c = { .scroll_speed = 5.0f, .drag_friction = 5.0f, .scale_friction = 10.0f };
+    Config c = { .scroll_speed = 2.0f, .drag_friction = 5.0f, .scale_friction = 10.0f };
 
     const char* home = getenv("HOME");
     const char* xdg = getenv("XDG_CONFIG_HOME");
