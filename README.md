@@ -12,12 +12,13 @@ A Wayland screen magnifier inspired by [boomer](https://github.com/tsoding/boome
 
 Zoomer is a low-level screen zoom tool that works directly with Wayland. It captures your entire desktop, composites all monitors into a single buffer, and renders it with smooth physics-based zoom and pan.
 
-Two capture backends are supported:
+Three capture backends are supported, tried in order:
 
-- **wlroots** — used on compositors like Hyprland via the `ext-image-copy-capture` protocol
-- **PipeWire portal** — used on Plasma and Niri (with [SHM patch](https://github.com/niri-wm/niri/pull/1791)) via `xdg-desktop-portal`
+- **ext-image-copy-capture** — the preferred backend, used on compositors that implement the `ext-image-copy-capture-v1` protocol
+- **zwlr-screencopy** — fallback for compositors implementing the older `wlr-screencopy-unstable-v1` protocol
+- **PipeWire portal** — universal fallback via `xdg-desktop-portal`, used on compositors that implement neither of the above
 
-It should work on any Wayland compositor that supports these protocols, but this project was built for fun and **no support is provided**.
+It should work on any Wayland compositor that supports at least one of these protocols, but this project was built for fun and **no support is provided**.
 
 ---
 
