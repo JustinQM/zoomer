@@ -18,6 +18,7 @@ OWN_OBJ := $(patsubst $(SRCDIR)/%.c,$(BUILD)/%.o,$(OWN_SRC))
 # Protocols whose generated headers our sources actually include/use.
 PROTO_USED := \
     wlr-layer-shell-unstable-v1 \
+    wlr-screencopy-unstable-v1 \
     ext-image-copy-capture \
     ext-image-capture-source \
     xdg-output
@@ -88,6 +89,11 @@ $(BUILD)/xdg-output.c $(BUILD)/xdg-output.h &: \
 		$(WAYLAND_PROTOCOLS_DIR)/unstable/xdg-output/xdg-output-unstable-v1.xml | $(BUILD)
 	wayland-scanner private-code  $< $(BUILD)/xdg-output.c
 	wayland-scanner client-header $< $(BUILD)/xdg-output.h
+
+$(BUILD)/wlr-screencopy-unstable-v1.c $(BUILD)/wlr-screencopy-unstable-v1.h &: \
+		$(WLR_PROTOCOLS_DIR)/unstable/wlr-screencopy-unstable-v1.xml | $(BUILD)
+	wayland-scanner private-code  $< $(BUILD)/wlr-screencopy-unstable-v1.c
+	wayland-scanner client-header $< $(BUILD)/wlr-screencopy-unstable-v1.h
 
 # Link-only protocols: private-code only, no header.
 $(BUILD)/xdg-shell.c: $(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell/xdg-shell.xml | $(BUILD)

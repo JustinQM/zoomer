@@ -10,12 +10,17 @@
 
 #include "capture_wlr.h"
 
+typedef struct CaptureWlr CaptureWlr;
+
 typedef struct
 {
-    const OutputInfo* info; // borrowed; used for error messages and dimensions
+    const OutputInfo* info;
+    CaptureWlr* w;
 
+    void* shm_data;
+    size_t shm_size;
+    struct wl_shm_pool* pool;
     struct wl_buffer* buffer;
-    uint32_t buffer_offset;
 
     struct ext_image_capture_source_v1* source;
 
@@ -24,24 +29,23 @@ typedef struct
 
     struct ext_image_copy_capture_frame_v1* frame;
     bool frame_done;
+
+    struct zwlr_screencopy_frame_v1* zwlr_frame;
 } WlrOutput;
 
-typedef struct
+struct CaptureWlr
 {
     struct wl_display* display;
     struct wl_shm* shm;
     struct ext_output_image_capture_source_manager_v1* source_manager;
     struct ext_image_copy_capture_manager_v1* copy_manager;
+    struct zwlr_screencopy_manager_v1* screencopy_manager;
 
     const OutputInfo* outputs;
     uint32_t output_count;
 
-    void* shm_data;
-    size_t shm_size;
-    struct wl_shm_pool* pool;
-
     WlrOutput wlr_outputs[MAX_OUTPUTS];
-} CaptureWlr;
+};
 
 static int allocate_shm(size_t size)
 {
@@ -55,7 +59,6 @@ static int allocate_shm(size_t size)
     return fd;
 }
 
-//session
 static void session_handle_buffer_size(void* data, struct ext_image_copy_capture_session_v1* session, uint32_t width, uint32_t height)
 {
     (void)data;
@@ -110,7 +113,6 @@ static const struct ext_image_copy_capture_session_v1_listener session_listener 
     .stopped = session_handle_stopped,
 };
 
-//frame
 static void frame_handle_transform(void* data, struct ext_image_copy_capture_frame_v1* frame, uint32_t transform)
 {
     (void)data;
@@ -160,36 +162,71 @@ static const struct ext_image_copy_capture_frame_v1_listener frame_listener =
     .failed = frame_handle_failed,
 };
 
-static void wlr_grab(void* backend)
+static void zwlr_frame_handle_buffer(void* data, struct zwlr_screencopy_frame_v1* frame, uint32_t format, uint32_t width, uint32_t height, uint32_t stride)
 {
-    CaptureWlr* w = backend;
+    (void)frame;
+    WlrOutput* o = data;
+    if (o->buffer) return;
+    o->shm_size = (size_t)stride * height;
+    int fd = allocate_shm(o->shm_size);
+    o->shm_data = mmap(NULL, o->shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (o->shm_data == MAP_FAILED) die("mmap(%zu) failed: %s", o->shm_size, strerror(errno));
+    o->pool = wl_shm_create_pool(o->w->shm, fd, (int32_t)o->shm_size);
+    close(fd);
+    o->buffer = wl_shm_pool_create_buffer(o->pool, 0, (int32_t)width, (int32_t)height, (int32_t)stride, format);
+}
 
-    // pack each output's buffer sequentially into one shm pool
-    int32_t total_width = 0;
-    int32_t max_height = 0;
-    for (uint32_t i = 0; i < w->output_count; i++)
-    {
-        total_width += w->outputs[i].width;
-        if (max_height < w->outputs[i].height) max_height = w->outputs[i].height;
-    }
+static void zwlr_frame_handle_flags(void* data, struct zwlr_screencopy_frame_v1* frame, uint32_t flags)
+{
+    (void)data;
+    (void)frame;
+    (void)flags;
+}
 
-    w->shm_size = (size_t)total_width * (size_t)max_height * 4;
-    int shm_fd = allocate_shm(w->shm_size);
+static void zwlr_frame_handle_ready(void* data, struct zwlr_screencopy_frame_v1* frame, uint32_t tv_sec_hi, uint32_t tv_sec_lo, uint32_t tv_nsec)
+{
+    (void)frame;
+    (void)tv_sec_hi;
+    (void)tv_sec_lo;
+    (void)tv_nsec;
+    WlrOutput* o = data;
+    o->frame_done = true;
+}
 
-    w->shm_data = mmap(NULL, w->shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (w->shm_data == MAP_FAILED) die("mmap(%zu) failed: %s", w->shm_size, strerror(errno));
+static void zwlr_frame_handle_failed(void* data, struct zwlr_screencopy_frame_v1* frame)
+{
+    (void)frame;
+    WlrOutput* o = data;
+    die("capturing frame on output %s failed", o->info->make ? o->info->make : "?");
+}
 
-    w->pool = wl_shm_create_pool(w->shm, shm_fd, (int32_t)w->shm_size);
-    close(shm_fd); // the pool keeps its own reference; we no longer need the fd
+static void zwlr_frame_handle_linux_dmabuf(void* data, struct zwlr_screencopy_frame_v1* frame, uint32_t format, uint32_t width, uint32_t height)
+{
+    (void)data;
+    (void)frame;
+    (void)format;
+    (void)width;
+    (void)height;
+}
 
-    uint32_t offset = 0;
-    for (uint32_t i = 0; i < w->output_count; i++)
-    {
-        w->wlr_outputs[i].buffer = wl_shm_pool_create_buffer(w->pool, (int32_t)offset, w->outputs[i].width, w->outputs[i].height, w->outputs[i].width * 4, WL_SHM_FORMAT_XRGB8888);
-        w->wlr_outputs[i].buffer_offset = offset;
-        offset += (uint32_t)w->outputs[i].width * (uint32_t)w->outputs[i].height * 4;
-    }
+static void zwlr_frame_handle_buffer_done(void* data, struct zwlr_screencopy_frame_v1* frame)
+{
+    WlrOutput* o = data;
+    zwlr_screencopy_frame_v1_copy(frame, o->buffer);
+}
 
+static const struct zwlr_screencopy_frame_v1_listener zwlr_frame_listener =
+{
+    .buffer = zwlr_frame_handle_buffer,
+    .flags = zwlr_frame_handle_flags,
+    .ready = zwlr_frame_handle_ready,
+    .failed = zwlr_frame_handle_failed,
+    .linux_dmabuf = zwlr_frame_handle_linux_dmabuf,
+    .buffer_done = zwlr_frame_handle_buffer_done,
+};
+
+static void wlr_grab_ext(CaptureWlr* w)
+{
     for (uint32_t i = 0; i < w->output_count; i++)
         w->wlr_outputs[i].source = ext_output_image_capture_source_manager_v1_create_source(w->source_manager, w->outputs[i].output);
 
@@ -210,7 +247,6 @@ static void wlr_grab(void* backend)
         ext_image_copy_capture_frame_v1_capture(w->wlr_outputs[i].frame);
     }
 
-    // block until every output has delivered its frame
     for (;;)
     {
         bool all_done = true;
@@ -223,12 +259,57 @@ static void wlr_grab(void* backend)
     }
 }
 
+static void wlr_grab_zwlr(CaptureWlr* w)
+{
+    for (uint32_t i = 0; i < w->output_count; i++)
+    {
+        w->wlr_outputs[i].zwlr_frame = zwlr_screencopy_manager_v1_capture_output(w->screencopy_manager, 0, w->outputs[i].output);
+        zwlr_screencopy_frame_v1_add_listener(w->wlr_outputs[i].zwlr_frame, &zwlr_frame_listener, &w->wlr_outputs[i]);
+    }
+
+    for (;;)
+    {
+        bool all_done = true;
+        for (uint32_t i = 0; i < w->output_count; i++)
+        {
+            if (!w->wlr_outputs[i].frame_done) { all_done = false; break; }
+        }
+        if (all_done) break;
+        if (wl_display_dispatch(w->display) < 0) die("wl_display_dispatch failed during capture");
+    }
+}
+
+static void wlr_grab(void* backend)
+{
+    CaptureWlr* w = backend;
+
+    if (w->copy_manager)
+    {
+        for (uint32_t i = 0; i < w->output_count; i++)
+        {
+            WlrOutput* o = &w->wlr_outputs[i];
+            o->shm_size = (size_t)w->outputs[i].width * (size_t)w->outputs[i].height * 4;
+            int fd = allocate_shm(o->shm_size);
+            o->shm_data = mmap(NULL, o->shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            if (o->shm_data == MAP_FAILED) die("mmap(%zu) failed: %s", o->shm_size, strerror(errno));
+            o->pool = wl_shm_create_pool(w->shm, fd, (int32_t)o->shm_size);
+            close(fd);
+            o->buffer = wl_shm_pool_create_buffer(o->pool, 0, w->outputs[i].width, w->outputs[i].height, w->outputs[i].width * 4, WL_SHM_FORMAT_XRGB8888);
+        }
+        wlr_grab_ext(w);
+    }
+    else
+    {
+        wlr_grab_zwlr(w);
+    }
+}
+
 static const void* wlr_output_pixels(void* backend, uint32_t index)
 {
     CaptureWlr* w = backend;
     if (index >= w->output_count) return NULL;
     if (!w->wlr_outputs[index].frame_done) return NULL;
-    return (const uint8_t*)w->shm_data + w->wlr_outputs[index].buffer_offset;
+    return w->wlr_outputs[index].shm_data;
 }
 
 static void wlr_destroy(void* backend)
@@ -237,13 +318,14 @@ static void wlr_destroy(void* backend)
     for (uint32_t i = 0; i < w->output_count; i++)
     {
         WlrOutput* o = &w->wlr_outputs[i];
-        if (o->frame)   ext_image_copy_capture_frame_v1_destroy(o->frame);
-        if (o->session) ext_image_copy_capture_session_v1_destroy(o->session);
-        if (o->source)  ext_image_capture_source_v1_destroy(o->source);
-        if (o->buffer)  wl_buffer_destroy(o->buffer);
+        if (o->zwlr_frame) zwlr_screencopy_frame_v1_destroy(o->zwlr_frame);
+        if (o->frame)      ext_image_copy_capture_frame_v1_destroy(o->frame);
+        if (o->session)    ext_image_copy_capture_session_v1_destroy(o->session);
+        if (o->source)     ext_image_capture_source_v1_destroy(o->source);
+        if (o->buffer)     wl_buffer_destroy(o->buffer);
+        if (o->pool)       wl_shm_pool_destroy(o->pool);
+        if (o->shm_data && o->shm_data != MAP_FAILED) munmap(o->shm_data, o->shm_size);
     }
-    if (w->pool) wl_shm_pool_destroy(w->pool);
-    if (w->shm_data && w->shm_data != MAP_FAILED) munmap(w->shm_data, w->shm_size);
     free(w);
 }
 
@@ -261,11 +343,13 @@ void capture_wlr_handle_global(CaptureWlrGlobals* g, struct wl_registry* registr
         g->source_manager = wl_registry_bind(registry, name, &ext_output_image_capture_source_manager_v1_interface, 1);
     else if (strcmp(interface, ext_image_copy_capture_manager_v1_interface.name) == 0)
         g->copy_manager = wl_registry_bind(registry, name, &ext_image_copy_capture_manager_v1_interface, 1);
+    else if (strcmp(interface, zwlr_screencopy_manager_v1_interface.name) == 0)
+        g->screencopy_manager = wl_registry_bind(registry, name, &zwlr_screencopy_manager_v1_interface, 3);
 }
 
 bool capture_wlr_available(const CaptureWlrGlobals* g)
 {
-    return g->source_manager && g->copy_manager;
+    return (g->source_manager && g->copy_manager) || g->screencopy_manager;
 }
 
 void* capture_wlr_create(const CaptureWlrGlobals* g, struct wl_display* display, struct wl_shm* shm, const OutputInfo* outputs, uint32_t output_count)
@@ -277,11 +361,15 @@ void* capture_wlr_create(const CaptureWlrGlobals* g, struct wl_display* display,
     w->shm = shm;
     w->source_manager = g->source_manager;
     w->copy_manager = g->copy_manager;
+    w->screencopy_manager = g->screencopy_manager;
     w->outputs = outputs;
     w->output_count = output_count;
 
     for (uint32_t i = 0; i < output_count; i++)
+    {
         w->wlr_outputs[i].info = &outputs[i];
+        w->wlr_outputs[i].w = w;
+    }
 
     return w;
 }

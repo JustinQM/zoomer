@@ -4,14 +4,15 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "capture.h" // CaptureImpl, OutputInfo
+#include "capture.h" 
 #include "ext-image-copy-capture.h"
 #include "ext-image-capture-source.h"
+#include "wlr-screencopy-unstable-v1.h"
 
-// wlroots-specific globals, collected during registry enumeration.
 typedef struct
 {
     struct ext_output_image_capture_source_manager_v1* source_manager;
+    struct zwlr_screencopy_manager_v1* screencopy_manager;
     struct ext_image_copy_capture_manager_v1* copy_manager;
 } CaptureWlrGlobals;
 

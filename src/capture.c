@@ -6,10 +6,9 @@
 
 struct Capture
 {
-    const CaptureImpl* impl; // NULL until capture_init picks a backend
-    void* backend;           // backend private data
+    const CaptureImpl* impl; 
+    void* backend;
 
-    // globals collected during registry enumeration, consumed by capture_init
     CaptureWlrGlobals wlr;
 };
 
@@ -24,8 +23,6 @@ void capture_handle_global(Capture* cap, struct wl_registry* registry, uint32_t 
 {
     if (!cap) return;
     capture_wlr_handle_global(&cap->wlr, registry, name, interface, version);
-    // future: capture_portal needs no wayland globals here; it goes through the
-    // screencast portal + PipeWire, so there is nothing to forward to it.
 }
 
 void capture_init(Capture* cap, struct wl_display* display, struct wl_shm* shm, const OutputInfo* outputs, uint32_t output_count)
