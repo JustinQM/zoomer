@@ -311,6 +311,11 @@ static void pointer_handle_motion(void* data, struct wl_pointer* pointer, uint32
         state->redraw = true;
     }
 
+    if (state->flashlight)
+    {
+        state->redraw = true;
+    }
+
     state->cursor_x = new_x;
     state->cursor_y = new_y;
 }
@@ -331,7 +336,7 @@ static void pointer_handle_axis(void* data, struct wl_pointer* pointer, uint32_t
     }
     else
     {
-        state->zoom_vel -= copysignf(state->config.scroll_speed, (float)v);
+        state->zoom_vel -= (float)v * state->config.scroll_speed * 0.1f;
     }
     state->redraw = true;
 }

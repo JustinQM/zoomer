@@ -246,8 +246,6 @@ int main(void)
     struct timespec last_ts;
     clock_gettime(CLOCK_MONOTONIC, &last_ts);
 
-    uint32_t frames = 0;
-
     while (!core.should_quit)
     {
         while (!core.should_quit && wl_display_prepare_read(core.display) != 0)
@@ -277,7 +275,7 @@ int main(void)
         clock_gettime(CLOCK_MONOTONIC, &now_ts);
         float dt = (now_ts.tv_sec - last_ts.tv_sec) + (now_ts.tv_nsec - last_ts.tv_nsec) / 1e9f;
         last_ts = now_ts;
-        if (dt > 0.1f) dt = 0.1f;
+        if (dt > 0.00417f) dt = 0.00417f;
 
         if (core.last_key_state == WL_KEYBOARD_KEY_STATE_PRESSED)
         {
@@ -360,9 +358,6 @@ int main(void)
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
         eglSwapBuffers(egl_display, egl_surface);
-
-        frames++;
-        printf("frame count: %d\n", frames);
     }
 
     glDeleteTextures(1, &texture);
