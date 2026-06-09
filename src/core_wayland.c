@@ -223,6 +223,7 @@ static void keyboard_handle_key(void* data, struct wl_keyboard* keyboard, uint32
     }
     state->last_key = key;
     state->last_key_state = state_val;
+    state->redraw = true;
 }
 
 static void keyboard_handle_modifiers(void* data, struct wl_keyboard* keyboard, uint32_t serial, uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked, uint32_t group)
@@ -307,6 +308,7 @@ static void pointer_handle_motion(void* data, struct wl_pointer* pointer, uint32
         state->drag_accum_y += dy;
         state->drag_prev_x = new_x;
         state->drag_prev_y = new_y;
+        state->redraw = true;
     }
 
     state->cursor_x = new_x;
@@ -331,6 +333,7 @@ static void pointer_handle_axis(void* data, struct wl_pointer* pointer, uint32_t
     {
         state->zoom_vel -= copysignf(state->config.scroll_speed, (float)v);
     }
+    state->redraw = true;
 }
 
 static void pointer_handle_enter(void* data, struct wl_pointer* pointer, uint32_t serial, struct wl_surface* surface, wl_fixed_t x, wl_fixed_t y)
@@ -379,6 +382,7 @@ static void pointer_handle_button(void* data, struct wl_pointer* pointer, uint32
         {
             set_cursor(state, state->cursor_grab);
         }
+        state->redraw = true;
     }
 }
 
@@ -641,6 +645,7 @@ void core_wayland_create_surface(CoreWayland* c)
         if (c->cursor_grab && c->cursor_grabbing)
             c->cursor_surface = wl_compositor_create_surface(c->compositor);
     }
+    c->redraw = true;
 }
 
 void core_wayland_cleanup(CoreWayland* c)

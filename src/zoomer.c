@@ -246,17 +246,27 @@ int main(void)
     struct timespec last_ts;
     clock_gettime(CLOCK_MONOTONIC, &last_ts);
 
+    uint32_t frames = 0;
+
     while (!core.should_quit)
     {
         while (!core.should_quit && wl_display_prepare_read(core.display) != 0)
+        {
             wl_display_dispatch_pending(core.display);
+        }
 
         if (core.should_quit) { wl_display_cancel_read(core.display); break; }
 
         wl_display_flush(core.display);
 
+        bool animating = core.zoom_vel != 0.0f
+            || core.pan_vel_x != 0.0f
+            || core.pan_vel_y != 0.0f
+            || core.drag_active;
+
         struct pollfd pfd = { .fd = wl_fd, .events = POLLIN };
-        poll(&pfd, 1, 1);
+        int timeout = animating ? 0 : -1;
+        poll(&pfd, 1, timeout);
 
         if (pfd.revents & POLLIN) wl_display_read_events(core.display);
         else wl_display_cancel_read(core.display);
@@ -297,6 +307,7 @@ int main(void)
             apply_zoom(&core, expf(core.zoom_vel * dt));
             core.zoom_vel *= expf(-core.config.scale_friction * dt);
             if (fabsf(core.zoom_vel) < 1e-3f) core.zoom_vel = 0.0f;
+            core.redraw = true;
         }
 
         if (core.drag_active)
@@ -318,7 +329,12 @@ int main(void)
             core.pan_vel_y *= decay;
             if (fabsf(core.pan_vel_x) < 1e-4f) core.pan_vel_x = 0.0f;
             if (fabsf(core.pan_vel_y) < 1e-4f) core.pan_vel_y = 0.0f;
+            core.redraw = true;
         }
+
+
+        if (!animating && !core.redraw) continue;
+        core.redraw = false;
 
         OutputInfo* target = &core.outputs[core.target_output_index];
         glUniform2f(loc_uv_offset,
@@ -344,6 +360,9 @@ int main(void)
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
         eglSwapBuffers(egl_display, egl_surface);
+
+        frames++;
+        printf("frame count: %d\n", frames);
     }
 
     glDeleteTextures(1, &texture);

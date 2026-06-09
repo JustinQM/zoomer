@@ -42,6 +42,12 @@ OBJ := $(OWN_OBJ) $(PROTO_SRC:.c=.o)
 .DEFAULT_GOAL := all
 .PHONY: all clean run install
 
+.PHONY: release
+release: CFLAGS := -O2 -Wall -Wextra -I$(SRCDIR) -I. -I$(BUILD)
+release: CFLAGS += $(shell pkg-config --cflags wayland-client egl wayland-egl libsystemd libpipewire-0.3)
+release: clean $(ZOOMER)
+	strip $(ZOOMER)
+
 all: $(ZOOMER)
 
 run: $(ZOOMER)

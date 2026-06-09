@@ -112,6 +112,7 @@ typedef struct
 
     uint32_t last_key;
     uint32_t last_key_state;
+    bool redraw;
     bool should_quit;
 } CoreWayland;
 
